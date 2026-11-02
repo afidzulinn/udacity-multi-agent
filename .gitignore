@@ -1,0 +1,4 @@
+# Local download bundle and secrets (starter/.gitignore covers the project itself)
+*.zip
+.env
+aws.txt
