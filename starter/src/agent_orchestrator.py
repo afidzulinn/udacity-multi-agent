@@ -947,19 +947,6 @@ def create_guardrail() -> tuple[str, str]:
     """
     bedrock_client = boto3.client('bedrock', region_name=config.AWS_REGION)
 
-    # Check if guardrail already exists to avoid duplicates
-    existing = bedrock_client.list_guardrails()
-    for g in existing.get('guardrails', []):
-        if g['name'] == config.GUARDRAIL_NAME:
-            guardrail_id = g['id']
-            versions = bedrock_client.list_guardrails(guardrailIdentifier=guardrail_id)
-            guardrail_version = 'DRAFT'
-            for v in versions.get('guardrails', []):
-                if v.get('version', 'DRAFT') != 'DRAFT':
-                    guardrail_version = v['version']
-            print(f"Guardrail already exists: {guardrail_id} (version: {guardrail_version})")
-            return guardrail_id, guardrail_version
-
     # Create the guardrail
     # Use bedrock_client.create_guardrail() with:
     #   - name (config.GUARDRAIL_NAME) and description
@@ -1006,7 +993,7 @@ def create_guardrail() -> tuple[str, str]:
         ),
     }
 
-    response = bedrock_client.create_guardrail(
+    guardrail_spec = dict(
         name=config.GUARDRAIL_NAME,
         description="NovaMart customer support guardrail: harmful content, PII, "
                     "off-topic subjects and profanity.",
@@ -1038,12 +1025,22 @@ def create_guardrail() -> tuple[str, str]:
         blockedOutputsMessaging="I'm sorry, I can't provide that response. Please contact "
                                 "NovaMart support if you need further help.",
     )
-    guardrail_id = response['guardrailId']
-    print(f"  Guardrail created: {guardrail_id} (DRAFT)")
+
+    # Reuse an existing guardrail (e.g. from an earlier run) but bring its policies
+    # up to this specification, so re-running deploy never keeps stale settings.
+    existing = next((g for g in bedrock_client.list_guardrails().get('guardrails', [])
+                     if g['name'] == config.GUARDRAIL_NAME), None)
+    if existing:
+        guardrail_id = existing['id']
+        bedrock_client.update_guardrail(guardrailIdentifier=guardrail_id, **guardrail_spec)
+        print(f"  Guardrail already exists: {guardrail_id} - policies updated (DRAFT)")
+    else:
+        guardrail_id = bedrock_client.create_guardrail(**guardrail_spec)['guardrailId']
+        print(f"  Guardrail created: {guardrail_id} (DRAFT)")
 
     version = bedrock_client.create_guardrail_version(
         guardrailIdentifier=guardrail_id,
-        description="Initial published version",
+        description="Published by the deploy pipeline",
     )
     guardrail_version = version['version']
     print(f"  Guardrail version published: {guardrail_version}")
@@ -1542,10 +1539,16 @@ def deploy_all():
     print("="*60)
     print("  Deployment Complete!")
     print("="*60)
-    print(f"\n  Add these to your .env file:")
-    print(f"  AGENTCORE_RUNTIME_ARN={runtime_arn}")
-    print(f"  GUARDRAIL_ID={guardrail_id}")
-    print(f"  GUARDRAIL_VERSION={guardrail_version}\n")
+    # Record the deployed values in .env (no manual copy needed)
+    from dotenv import set_key
+    env_path = os.path.join(os.path.dirname(_SRC_DIR), '.env')
+    print(f"\n  Written to {env_path}:")
+    for key, value in (('AGENTCORE_RUNTIME_ARN', runtime_arn),
+                       ('GUARDRAIL_ID', guardrail_id),
+                       ('GUARDRAIL_VERSION', guardrail_version)):
+        set_key(env_path, key, value, quote_mode='never')
+        print(f"  {key}={value}")
+    print()
     print(f"  Then try the deployed runtime:")
     print(f"  python src/agent_orchestrator.py invoke \"What is the return policy for premium customers?\"")
     print(f"  or with the CLI:  agentcore invoke \"What is the return policy for premium customers?\"")
