@@ -54,7 +54,7 @@ unset KEY_ID SECRET TOKEN
 
 echo "Checking credentials..."
 if aws sts get-caller-identity --output table; then
-  echo "Logged in. Region: $REGION. Next: python config.py"
+  echo "Logged in. Region: $REGION. Next: bash infra_setup.sh"
 else
   echo "Login failed - the keys are wrong or the lab session expired. Update $FILE and run again."
   exit 1
