@@ -488,6 +488,7 @@ def build_policy_agent() -> Agent:
                            region_name=config.AWS_REGION),
         system_prompt=_retriever_prompt('Returns', 'retrieve_returns_policy'),
         tools=[retrieve_returns_policy],
+        callback_handler=None,   # runs in a worker thread - keep its stream off the terminal
     )
 
     @tool
@@ -509,6 +510,7 @@ def build_policy_agent() -> Agent:
                            region_name=config.AWS_REGION),
         system_prompt=_retriever_prompt('Shipping', 'retrieve_shipping_policy'),
         tools=[retrieve_shipping_policy],
+        callback_handler=None,   # runs in a worker thread - keep its stream off the terminal
     )
 
     @tool
@@ -530,6 +532,7 @@ def build_policy_agent() -> Agent:
                            region_name=config.AWS_REGION),
         system_prompt=_retriever_prompt('Warranty', 'retrieve_warranty_policy'),
         tools=[retrieve_warranty_policy],
+        callback_handler=None,   # runs in a worker thread - keep its stream off the terminal
     )
 
     @tool
@@ -740,8 +743,14 @@ unchanged."""
     # before the worker runs and trace.step_done('inventory_agent', old_version) after.
     def _run_worker(session_id: str, column: str, label: str, agent: Agent, prompt: str) -> str:
         """Read WorkflowState, run one worker agent, write its result back (optimistic lock)."""
-        state = _read_workflow_state(session_id)
-        if state is None:
+        # Strands runs tool calls from one model turn concurrently, so
+        # initialize_session may still be writing the record - wait briefly for it.
+        for _ in range(10):
+            state = _read_workflow_state(session_id)
+            if state is not None:
+                break
+            time.sleep(0.5)
+        else:
             return f"No WorkflowState for session {session_id} - call initialize_session first."
         old_version = int(state['version'])
         trace.step_start(column)

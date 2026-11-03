@@ -11,7 +11,8 @@ Writes RETURNS_KB_ID / SHIPPING_KB_ID / WARRANTY_KB_ID to .env.
 
 Safe to re-run: existing KBs and data sources are reused and synced again.
 
-Usage:  python create_kbs.py
+Usage:  python create_kbs.py         create + sync
+        python create_kbs.py show    print vector store / index / last sync of each KB
 """
 
 import os
@@ -127,7 +128,37 @@ def sync(kb_id: str, ds_id: str) -> None:
           f"{stats.get('numberOfDocumentsFailed', 0)} failed")
 
 
+def show() -> None:
+    """Print each KB's vector store, embedding model and latest sync - evidence for the review."""
+    for env_key, name, prefix, index_attr in KNOWLEDGE_BASES:
+        kb_id = getattr(config, env_key)
+        kb = bedrock_agent.get_knowledge_base(knowledgeBaseId=kb_id)['knowledgeBase']
+        vec = kb['knowledgeBaseConfiguration']['vectorKnowledgeBaseConfiguration']
+        store = kb['storageConfiguration']
+        s3v = store.get('s3VectorsConfiguration', {})
+        print(f"\n{kb['name']}  ({kb_id})  status={kb['status']}")
+        print(f"  Embedding model : {vec['embeddingModelArn'].split('/')[-1]}")
+        print(f"  Vector store    : {store['type']}")
+        print(f"  Vector bucket   : {s3v.get('vectorBucketArn', '-')}")
+        print(f"  Vector index    : {s3v.get('indexName') or s3v.get('indexArn', '-')}")
+        for ds in bedrock_agent.list_data_sources(knowledgeBaseId=kb_id)['dataSourceSummaries']:
+            s3 = bedrock_agent.get_data_source(knowledgeBaseId=kb_id, dataSourceId=ds['dataSourceId']
+                                               )['dataSource']['dataSourceConfiguration']['s3Configuration']
+            print(f"  Data source     : {ds['name']}  status={ds['status']}  "
+                  f"s3://{s3['bucketArn'].split(':::')[-1]}/{','.join(s3.get('inclusionPrefixes', []))}")
+            jobs = bedrock_agent.list_ingestion_jobs(
+                knowledgeBaseId=kb_id, dataSourceId=ds['dataSourceId'], maxResults=1,
+                sortBy={'attribute': 'STARTED_AT', 'order': 'DESCENDING'})['ingestionJobSummaries']
+            for job in jobs:
+                st = job.get('statistics', {})
+                print(f"  Last sync       : {job['status']}  {job['updatedAt']:%Y-%m-%d %H:%M UTC}  "
+                      f"scanned={st.get('numberOfDocumentsScanned', 0)} "
+                      f"failed={st.get('numberOfDocumentsFailed', 0)}")
+
+
 def main() -> None:
+    if sys.argv[1:] == ['show']:
+        return show()
     if not os.path.exists(ENV_PATH):
         sys.exit(".env not found - run: bash infra_setup.sh")
     for env_key, name, prefix, index_attr in KNOWLEDGE_BASES:
