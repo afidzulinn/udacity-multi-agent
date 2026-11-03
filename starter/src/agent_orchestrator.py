@@ -154,7 +154,9 @@ def _read_workflow_state(session_id: str) -> Optional[dict]:
     Read the current WorkflowState for a session.
     """
     table = dynamodb.Table(config.WORKFLOW_STATE_TABLE)
-    response = table.get_item(Key={'session_id': session_id})
+    # Strongly consistent: a record written moments ago by initialize_session
+    # must be visible to the next routing tool.
+    response = table.get_item(Key={'session_id': session_id}, ConsistentRead=True)
     return response.get('Item')
 
 
